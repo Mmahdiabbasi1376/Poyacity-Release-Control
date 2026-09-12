@@ -1,0 +1,60 @@
+name: Poyacity Production Approval
+run-name: Poyacity production approval | product_sha=${{ inputs.target_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact 40-character Poyacity Product main SHA to approve
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: poyacity-production-approval-${{ inputs.target_sha }}
+  cancel-in-progress: false
+
+jobs:
+  validate-request:
+    name: Validate immutable Poyacity approval request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate repository actor ref and SHA
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'Mmahdiabbasi1376/Poyacity-Release-Control'
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$GITHUB_ACTOR" = 'Mmahdiabbasi1376'
+          test "$GITHUB_TRIGGERING_ACTOR" = 'Mmahdiabbasi1376'
+          [[ "$TARGET_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          echo "POYACITY_APPROVAL_REQUEST_VALID=true"
+          echo "POYACITY_TARGET_SHA=${TARGET_SHA,,}"
+
+  approve-production:
+    name: Approve Poyacity Production
+    needs: validate-request
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production-approval
+      deployment: true
+    steps:
+      - name: Record approved immutable request
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'Mmahdiabbasi1376/Poyacity-Release-Control'
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$GITHUB_ACTOR" = 'Mmahdiabbasi1376'
+          test "$GITHUB_TRIGGERING_ACTOR" = 'Mmahdiabbasi1376'
+          [[ "$TARGET_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          echo "POYACITY_PRODUCTION_APPROVAL=APPROVED"
+          echo "POYACITY_TARGET_SHA=${TARGET_SHA,,}"

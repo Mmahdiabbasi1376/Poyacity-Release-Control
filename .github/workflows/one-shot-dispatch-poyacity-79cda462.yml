@@ -1,0 +1,37 @@
+name: One-Shot Dispatch Poyacity Production Approval 79cda462
+
+on:
+  push:
+    branches:
+      - ops/approve-poyacity-79cda462-20261003
+    paths:
+      - '.github/workflows/one-shot-dispatch-poyacity-79cda462.yml'
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.repository == 'Mmahdiabbasi1376/Poyacity-Release-Control' && github.actor == github.repository_owner
+    steps:
+      - name: Dispatch protected Production approval for exact Poyacity main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=$(curl --silent --show-error --output "$RUNNER_TEMP/dispatch.txt" --write-out '%{http_code}' \
+            --max-time 30 \
+            --request POST \
+            --url "https://api.github.com/repos/${REPOSITORY}/actions/workflows/production-approval.yml/dispatches" \
+            --header 'Accept: application/vnd.github+json' \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --header 'Content-Type: application/json' \
+            --data '{"ref":"main","inputs":{"target_sha":"79cda46210dab86bf96a8221e21a2317239f32cd"}}')
+          test "$status" = '204'
+          rm -f "$RUNNER_TEMP/dispatch.txt"

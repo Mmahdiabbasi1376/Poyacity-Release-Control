@@ -1,0 +1,118 @@
+name: Dispatch Approved Poyacity Production
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dispatch/request.json'
+      - '.github/workflows/dispatch-approved-production.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: poyacity-approved-production-dispatch
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Validate OWNER approval and dispatch Poyacity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production-approval
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Validate immutable dispatch request and OWNER approval
+        id: request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          request='dispatch/request.json'
+          test -f "$request"
+          enabled="$(jq -r '.enabled' "$request")"
+          if [ "$enabled" != 'true' ]; then
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo 'POYACITY_APPROVED_DISPATCH_DISABLED=true'
+            exit 0
+          fi
+
+          target_repo="$(jq -r '.target_repo' "$request")"
+          workflow_file="$(jq -r '.workflow_file' "$request")"
+          target_ref="$(jq -r '.ref' "$request")"
+          target_sha="$(jq -r '.target_sha' "$request" | tr '[:upper:]' '[:lower:]')"
+          approval_run_id="$(jq -r '.approval_run_id' "$request")"
+
+          test "$target_repo" = 'Mmahdiabbasi1376/Poyacity.ir'
+          test "$workflow_file" = 'appwrite-production.yml'
+          test "$target_ref" = 'main'
+          [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$approval_run_id" =~ ^[1-9][0-9]*$ ]]
+          test "$(jq -r '.inputs.environment' "$request")" = 'production'
+          test "$(jq -r '.inputs.source_ref' "$request")" = ''
+          test "$(jq -r '.inputs.source_sha' "$request")" = ''
+          test "$(jq -r '.inputs.expected_commit' "$request" | tr '[:upper:]' '[:lower:]')" = "$target_sha"
+          test "$(jq -r '.inputs.production_confirmation' "$request")" = 'AUTHORIZE_POYACITY_PRODUCTION'
+
+          approval="$(curl --fail --silent --show-error             -H 'Accept: application/vnd.github+json'             -H "Authorization: Bearer ${GH_TOKEN}"             -H 'X-GitHub-Api-Version: 2022-11-28'             "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${approval_run_id}")"
+
+          test "$(jq -r '.path' <<<"$approval")" = '.github/workflows/production-approval.yml'
+          test "$(jq -r '.event' <<<"$approval")" = 'workflow_dispatch'
+          test "$(jq -r '.status' <<<"$approval")" = 'completed'
+          test "$(jq -r '.conclusion' <<<"$approval")" = 'success'
+          test "$(jq -r '.head_branch' <<<"$approval")" = 'main'
+          test "$(jq -r '.actor.login' <<<"$approval")" = 'Mmahdiabbasi1376'
+          test "$(jq -r '.triggering_actor.login' <<<"$approval")" = 'Mmahdiabbasi1376'
+          test "$(jq -r '.display_title' <<<"$approval")" = "Poyacity production approval | product_sha=${target_sha}"
+
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "target_repo=$target_repo" >> "$GITHUB_OUTPUT"
+          echo "workflow_file=$workflow_file" >> "$GITHUB_OUTPUT"
+          echo "target_ref=$target_ref" >> "$GITHUB_OUTPUT"
+          echo "target_sha=$target_sha" >> "$GITHUB_OUTPUT"
+          echo "approval_run_id=$approval_run_id" >> "$GITHUB_OUTPUT"
+          echo 'POYACITY_APPROVAL_EVIDENCE_PASS=true'
+
+      - name: Dispatch exact approved Poyacity request
+        if: steps.request.outputs.enabled == 'true'
+        shell: bash
+        env:
+          POYACITY_ACTIONS_DISPATCH_TOKEN: ${{ secrets.POYACITY_ACTIONS_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$POYACITY_ACTIONS_DISPATCH_TOKEN"
+          request='dispatch/request.json'
+          approval_run_id='${{ steps.request.outputs.approval_run_id }}'
+          target_repo='${{ steps.request.outputs.target_repo }}'
+          workflow_file='${{ steps.request.outputs.workflow_file }}'
+          target_ref='${{ steps.request.outputs.target_ref }}'
+
+          payload="$(jq -c --arg ref "$target_ref" --arg approval "$approval_run_id" '
+            {
+              ref: $ref,
+              inputs: (
+                .inputs
+                | .external_approval_run_id = $approval
+                | with_entries(.value |= tostring)
+              )
+            }
+          ' "$request")"
+
+          code="$(curl --silent --show-error --output /tmp/dispatch-response.txt --write-out '%{http_code}'             --request POST             -H 'Accept: application/vnd.github+json'             -H "Authorization: Bearer ${POYACITY_ACTIONS_DISPATCH_TOKEN}"             -H 'X-GitHub-Api-Version: 2022-11-28'             -H 'Content-Type: application/json'             "https://api.github.com/repos/${target_repo}/actions/workflows/${workflow_file}/dispatches"             --data "$payload")"
+
+          if [ "$code" != '204' ]; then
+            cat /tmp/dispatch-response.txt >&2 || true
+            echo "POYACITY_DISPATCH_HTTP=$code" >&2
+            exit 1
+          fi
+
+          echo 'POYACITY_DISPATCH_ACCEPTED=true'
+          echo "POYACITY_TARGET_SHA=${{ steps.request.outputs.target_sha }}"
+          echo "POYACITY_APPROVAL_RUN_ID=$approval_run_id"
